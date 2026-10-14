@@ -78,14 +78,17 @@ The token changes every time the server starts. Stop the server with Ctrl-C.
 
 ### Arguments: one per line using OpenCode as an example
 
-These examples use flags from my memory of the OpenCode CLI, so check them against `opencode --help` for your version.
+These examples use flags verified against OpenCode v2.0.28. Check the [official CLI docs](https://opencode.ai/docs/cli/) for the latest flags.
 
 Each line becomes exactly one argument. A flag and its value go on separate lines, and no quoting is needed:
 
 ```
--m
+mini
+--model
 openrouter/openrouter/free
 ```
+
+This opens the TUI with the chosen model.
 
 A line like `-m openrouter/openrouter/free` would be passed as a single argument containing a space, which most programs reject. Leave the field empty for a normal interactive session. Check your agent's `--help` for the flags it supports.
 
@@ -98,10 +101,13 @@ A line like `-m openrouter/openrouter/free` would be passed as a single argument
 **Choose a model and continue the last session:**
 
 ```
--m
+mini
+--model
 anthropic/claude-sonnet-4-5
 -c
 ```
+
+This continues the last session in the TUI with the chosen model.
 
 **One-shot task, no interactive TUI:**
 
@@ -110,7 +116,40 @@ run
 fix the failing tests
 ```
 
-A message with spaces is fine on one line, because it’s a single argument. The quoting is handled for you, so don’t add quotes.
+A message with spaces is fine on one line, because it's a single argument. The quoting is handled for you, so don't add quotes.
+
+**One-shot task with JSON output (for scripting):**
+
+```
+run
+--format
+json
+explain this codebase
+```
+
+**Auto-approve permissions (no prompts):**
+
+```
+run
+--auto
+fix the failing tests
+```
+
+**Fork the last session (keep the original intact):**
+
+```
+--fork
+-c
+```
+
+**Get JSON output instead of formatted text:**
+
+```
+run
+--format
+json
+explain this codebase
+```
 
 **Resume a specific session:**
 
