@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>bwrap-web</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
+<style>
+  :root {
+    --bg: #ffffff; --panel: #f5f6f8; --text: #1c1e21; --muted: #5f6672;
+    --border: #d5d9e0; --accent: #2457d6; --danger: #b42318; --ok: #1a7f37;
+    --term-bg: #111318;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a; --panel: #1c1f25; --text: #e6e8ec; --muted: #9aa3b2;
+      --border: #333843; --accent: #6b95ff; --danger: #ff7b72; --ok: #56d364;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    display: flex; flex-direction: column;
+  }
+  header {
+    display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+    border-bottom: 1px solid var(--border); background: var(--panel);
+  }
+  header h1 { font-size: 15px; margin: 0; font-weight: 600; }
+  header .spacer { flex: 1; }
+  #status { color: var(--muted); font-size: 13px; }
+  main { flex: 1; display: flex; min-height: 0; }
+  aside {
+    width: 380px; max-width: 45%; overflow-y: auto; padding: 14px 16px;
+    border-right: 1px solid var(--border); background: var(--panel);
+  }
+  section.term { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--term-bg); }
+  #terminal { flex: 1; padding: 8px; min-height: 0; }
+  label { display: block; font-weight: 600; margin: 14px 0 4px; }
+  label small { font-weight: 400; color: var(--muted); display: block; }
+  input[type=text], textarea {
+    width: 100%; padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--bg); color: var(--text);
+    font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  textarea { resize: vertical; min-height: 84px; white-space: pre; }
+  .check { display: flex; align-items: flex-start; gap: 8px; margin-top: 14px; font-weight: 600; }
+  .check input { margin-top: 3px; }
+  .check small { display: block; font-weight: 400; color: var(--muted); }
+  button {
+    font: inherit; padding: 6px 12px; border-radius: 6px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger { color: var(--danger); }
+  button:disabled { opacity: .5; cursor: default; }
+  .row { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+  #message { margin-top: 12px; min-height: 1.4em; font-size: 13px; }
+  #message.err { color: var(--danger); }
+  #message.ok { color: var(--ok); }
+  pre#preview {
+    margin: 12px 0 0; padding: 10px; border: 1px solid var(--border); border-radius: 6px;
+    background: var(--bg); overflow-x: auto; font-size: 12px; max-height: 260px; overflow-y: auto;
+  }
+  .warn { margin-top: 14px; padding: 8px 10px; border-left: 3px solid var(--danger); font-size: 12px; color: var(--muted); }
+  @media (max-width: 800px) {
+    main { flex-direction: column; }
+    aside { width: 100%; max-width: none; max-height: 50%; border-right: 0; border-bottom: 1px solid var(--border); }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>bwrap-web</h1>
+  <span id="status">no session</span>
+  <span class="spacer"></span>
+  <button id="startBtn" class="primary">Start session</button>
+  <button id="stopBtn" class="danger" disabled>Stop</button>
+</header>
+
+<main>
+  <aside>
+    <label for="project_dir">Project directory <small>Read-write inside the sandbox.</small></label>
+    <input type="text" id="project_dir" spellcheck="false">
+
+    <label for="command">Command <small>Bare name (looked up on the host) or absolute path.</small></label>
+    <input type="text" id="command" spellcheck="false">
+
+    <label for="args">Arguments <small>One per line.</small></label>
+    <textarea id="args" spellcheck="false" style="min-height:50px"></textarea>
+
+    <label class="check"><input type="checkbox" id="share_net">
+      <span>Share host network <small>Needed for LLM API calls. Off = loopback only.</small></span>
+    </label>
+
+    <label for="ro_mounts">Read-only mounts <small>One per line, <code>~/</code> allowed. Missing paths are skipped.</small></label>
+    <textarea id="ro_mounts" spellcheck="false"></textarea>
+
+    <label for="rw_mounts">Read-write mounts <small>One per line. Missing paths under your home are created.</small></label>
+    <textarea id="rw_mounts" spellcheck="false"></textarea>
+
+    <label for="env_passthrough">Environment passthrough <small>Variable names, one per line. Copied in only if set on the host.</small></label>
+    <textarea id="env_passthrough" spellcheck="false"></textarea>
+
+    <div class="row">
+      <button id="saveBtn" class="primary">Save</button>
+      <button id="previewBtn">Preview command</button>
+    </div>
+    <div id="message"></div>
+    <pre id="preview" hidden></pre>
+
+    <div class="warn">
+      Anything mounted here can be read by the agent, and the network is shared, so a
+      manipulated agent could send it out. Only add what you need. Passed-through API keys
+      are visible to the agent.
+    </div>
+  </aside>
+
+  <section class="term">
+    <div id="terminal"></div>
+  </section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
+<script>
+(() => {
+  "use strict";
+  const token = new URLSearchParams(location.search).get("token") || "";
+  const $ = (id) => document.getElementById(id);
+  const lines = (id) => $(id).value.split("\n").map((s) => s.trim()).filter(Boolean);
+
+  function say(text, kind) {
+    const el = $("message");
+    el.textContent = text || "";
+    el.className = kind || "";
+  }
+
+  async function api(path, options) {
+    const res = await fetch(path, {
+      ...options,
+      headers: { "x-token": token, "content-type": "application/json", ...((options && options.headers) || {}) },
+    });
+    const text = await res.text();
+    let data = null;
+    try { data = JSON.parse(text); } catch (_) { /* not JSON */ }
+    if (!res.ok) throw new Error((data && data.error) || text || res.statusText);
+    return data;
+  }
+
+  function fill(cfg) {
+    $("project_dir").value = cfg.project_dir || "";
+    $("command").value = cfg.command || "";
+    $("args").value = (cfg.args || []).join("\n");
+    $("share_net").checked = !!cfg.share_net;
+    $("ro_mounts").value = (cfg.ro_mounts || []).join("\n");
+    $("rw_mounts").value = (cfg.rw_mounts || []).join("\n");
+    $("env_passthrough").value = (cfg.env_passthrough || []).join("\n");
+  }
+
+  function collect() {
+    return {
+      project_dir: $("project_dir").value.trim(),
+      command: $("command").value.trim(),
+      args: lines("args"),
+      share_net: $("share_net").checked,
+      ro_mounts: lines("ro_mounts"),
+      rw_mounts: lines("rw_mounts"),
+      env_passthrough: lines("env_passthrough"),
+    };
+  }
+
+  async function save() {
+    try {
+      const saved = await api("/api/config", { method: "PUT", body: JSON.stringify(collect()) });
+      fill(saved);
+      say("Saved.", "ok");
+      return true;
+    } catch (e) {
+      say(e.message, "err");
+      return false;
+    }
+  }
+
+  async function showPreview() {
+    if (!(await save())) return;
+    try {
+      const data = await api("/api/preview");
+      const pre = $("preview");
+      pre.textContent = data.command;
+      pre.hidden = false;
+    } catch (e) {
+      $("preview").hidden = true;
+      say(e.message, "err");
+    }
+  }
+
+  // ---- terminal ----------------------------------------------------------
+  const term = new Terminal({
+    cursorBlink: true,
+    fontSize: 14,
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+    theme: { background: "#111318" },
+  });
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  term.open($("terminal"));
+  fit.fit();
+  term.writeln("Configure on the left, then press \"Start session\".");
+
+  const encoder = new TextEncoder();
+  let ws = null;
+
+  function setRunning(running) {
+    $("startBtn").disabled = running;
+    $("stopBtn").disabled = !running;
+    $("status").textContent = running ? "session running" : "no session";
+  }
+
+  function sendSize() {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ cols: term.cols, rows: term.rows }));
+    }
+  }
+
+  async function start() {
+    if (ws) return;
+    if (!(await save())) return;
+    fit.fit();
+    term.reset();
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    const url = `${proto}://${location.host}/ws?token=${encodeURIComponent(token)}&cols=${term.cols}&rows=${term.rows}`;
+    ws = new WebSocket(url);
+    ws.binaryType = "arraybuffer";
+    ws.onopen = () => { setRunning(true); term.focus(); };
+    ws.onmessage = (ev) => {
+      if (ev.data instanceof ArrayBuffer) term.write(new Uint8Array(ev.data));
+      else term.write(ev.data);
+    };
+    ws.onclose = () => { ws = null; setRunning(false); term.writeln("\r\n[disconnected]"); };
+    ws.onerror = () => { say("WebSocket error (check the token in the URL).", "err"); };
+  }
+
+  function stop() {
+    if (ws) ws.close();
+  }
+
+  term.onData((data) => {
+    if (ws && ws.readyState === WebSocket.OPEN) ws.send(encoder.encode(data));
+  });
+  window.addEventListener("resize", () => { fit.fit(); sendSize(); });
+  term.onResize(sendSize);
+
+  $("saveBtn").addEventListener("click", save);
+  $("previewBtn").addEventListener("click", showPreview);
+  $("startBtn").addEventListener("click", start);
+  $("stopBtn").addEventListener("click", stop);
+
+  api("/api/config").then(fill).catch((e) => say(e.message, "err"));
+})();
+</script>
+</body>
+</html>
