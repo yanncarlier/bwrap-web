@@ -107,6 +107,15 @@ impl Default for Config {
                 "MISTRAL_API_KEY",
                 "ZAI_API_KEY",
                 "OPENCODE_CONFIG",
+                "NVIDIA_API_KEY",
+                "CEREBRAS_API_KEY",
+                "GROQ_API_KEY",
+                "MINIMAX_API_KEY",
+                "MOONSHOT_API_KEY",
+                "XAI_API_KEY",
+                "ZAI_API_KEY",
+                "MISTRAL_API_KEY",
+                "HF_TOKEN",
             ]),
         }
     }
