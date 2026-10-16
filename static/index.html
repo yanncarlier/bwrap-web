@@ -107,6 +107,7 @@
     <div class="row">
       <button id="saveBtn" class="primary">Save</button>
       <button id="previewBtn">Preview command</button>
+      <button id="resetBtn">Reset to defaults</button>
     </div>
     <div id="message"></div>
     <pre id="preview" hidden></pre>
@@ -184,6 +185,18 @@
     }
   }
 
+  // Reload the form with the built-in defaults. Nothing is persisted until the
+  // user presses Save, so a stray click can't overwrite the saved config.
+  async function resetDefaults() {
+    try {
+      fill(await api("/api/config/defaults"));
+      $("preview").hidden = true;
+      say("Defaults loaded. Press Save to apply.", "ok");
+    } catch (e) {
+      say(e.message, "err");
+    }
+  }
+
   async function showPreview() {
     if (!(await save())) return;
     try {
@@ -255,6 +268,7 @@
 
   $("saveBtn").addEventListener("click", save);
   $("previewBtn").addEventListener("click", showPreview);
+  $("resetBtn").addEventListener("click", resetDefaults);
   $("startBtn").addEventListener("click", start);
   $("stopBtn").addEventListener("click", stop);
 

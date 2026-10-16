@@ -542,6 +542,12 @@ async fn get_config(State(st): State<Shared>) -> Json<Config> {
     Json(st.config.read().await.clone())
 }
 
+/// The built-in defaults, so the UI can offer a "reset to defaults" without
+/// having to persist them first.
+async fn get_config_defaults() -> Json<Config> {
+    Json(Config::default())
+}
+
 async fn put_config(
     State(st): State<Shared>,
     Json(cfg): Json<Config>,
@@ -748,6 +754,7 @@ async fn main() -> Result<()> {
     let app = Router::new()
         .route("/", get(index))
         .route("/api/config", get(get_config).put(put_config))
+        .route("/api/config/defaults", get(get_config_defaults))
         .route("/api/preview", get(preview))
         .route("/ws", get(ws_handler))
         .layer(middleware::from_fn_with_state(state.clone(), guard))

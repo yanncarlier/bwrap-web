@@ -15,6 +15,7 @@ It is a single Rust binary with one HTML file embedded in it.
 - Edit the project directory, command, arguments, network access, read-only mounts, read-write mounts and environment passthrough from a web page.
 - Settings are validated and saved to `~/.config/bwrap-web/config.json`.
 - **Preview command** shows the exact `bwrap` command line. Passed-through API keys are masked in the preview.
+- **Reset to defaults** refills the form with the built-in defaults; nothing is written until you press **Save**.
 - A full interactive terminal in the browser (xterm.js over a websocket and a PTY), including resize.
 - Relative project paths such as `./test` are supported.
 - Closing the page or pressing **Stop** ends the sandbox.
@@ -220,6 +221,7 @@ bwrap-web/
 | `GET /`               | The web page                                                 |
 | `GET /api/config`     | Current settings (JSON)                                      |
 | `PUT /api/config`     | Validate and save settings                                   |
+| `GET /api/config/defaults` | Built-in default settings (nothing is saved)            |
 | `GET /api/preview`    | The `bwrap` command line for the saved settings              |
 | `GET /ws?cols=&rows=` | Websocket terminal. Binary frames are keyboard input and output; a text frame `{"cols":N,"rows":M}` resizes |
 
