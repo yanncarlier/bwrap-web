@@ -65,7 +65,7 @@ The token changes every time the server starts. Stop the server with Ctrl-C.
 
 | Setting                     | Meaning                                                      |
 | --------------------------- | ------------------------------------------------------------ |
-| **Project directory**       | The only directory the agent can write to (besides the read-write mounts). Absolute, `~/...`, or relative (see below). |
+| **Project directory** | The only directory the agent can write to (besides the read-write mounts). Defaults to the directory you started `bwrap-web` from. Absolute, `~/...`, or relative (see below). |
 | **Command**                 | Program to run in the sandbox. A bare name is looked up on the host (`PATH`, then `~/.opencode/bin`, then `~/.local/bin`); or give an absolute path. |
 | **Arguments**               | Arguments for the program, **one per line**.                 |
 | **Share host network**      | On: the sandbox uses the host network (needed for LLM APIs and `localhost` services). Off: loopback only. |
@@ -73,13 +73,19 @@ The token changes every time the server starts. Stop the server with Ctrl-C.
 | **Read-write mounts**       | Extra paths visible read-write, one per line. Missing paths under your home directory are created so agent state persists. |
 | **Environment passthrough** | Names of host environment variables to copy into the sandbox, if they are set. Everything else is cleared. |
 
-### Relative project paths
+### Project directory paths
 
-`./test`, `test` and `../other` are resolved against the directory where `bwrap-web` was **started**, then canonicalized (symlinks and `..` resolved) before any safety check runs. A saved `./test` therefore points at a different folder if you start the server from a different directory. Use an absolute path or `~/...` for a fixed project.
+The field defaults to the directory you started `bwrap-web` from, so `bwrap-web` and then `opencode` in a checkout needs no setup.
+
+Any path under your home directory is stored and displayed in `~/...` form rather than as the full `/home/you/...` path — that's purely cosmetic, `~` is expanded back to the same absolute directory before the safety checks and before `bwrap` runs. Paths outside your home directory (say `/data/projects/x`) are kept absolute, as are relative ones.
+
+Relative paths (`./test`, `test`, `../other`) are resolved against the directory where `bwrap-web` was **started**, then canonicalized (symlinks and `..` resolved) before any safety check runs. They are deliberately left unshortened, so a saved `./test` still points at a different folder if you start the server from a different directory. Use `~/...` or an absolute path for a fixed project.
 
 ### Arguments: one per line using OpenCode as an example
 
 These examples use flags verified against OpenCode v2.0.28. Check the [official CLI docs](https://opencode.ai/docs/cli/) for the latest flags.
+
+The default is a single `--standalone` line. Without it, OpenCode attaches to a long-lived host-side `opencode serve --service` daemon and runs its tool calls *there*, i.e. outside the namespaces, so nothing this sandbox does would contain them. `--standalone` makes the agent start its own server as a child process, which inherits the mount and PID namespaces. Removing the line trades containment for the shared background service.
 
 Each line becomes exactly one argument. A flag and its value go on separate lines, and no quoting is needed:
 
@@ -91,7 +97,19 @@ openrouter/openrouter/free
 
 This opens the TUI with the chosen model.
 
-A line like `-m openrouter/openrouter/free` would be passed as a single argument containing a space, which most programs reject. Leave the field empty for a normal interactive session. Check your agent's `--help` for the flags it supports.
+A line like `-m openrouter/openrouter/free` would be passed as a single argument containing a space, which most programs reject. Check your agent's `--help` for the flags it supports.
+
+### Flag order matters for `run` and `mini`
+
+The default `--standalone` is only accepted **before** a subcommand. `opencode --standalone run "..."` fails with `Unrecognized flag: --standalone in command opencode run`, so when you add `run` or `mini` you have to move the flag **after** it:
+
+```
+run
+--standalone
+fix the failing tests
+```
+
+Administrative subcommands (`session`, `debug`, `models`, ...) reject `--standalone` entirely — leave it out for those. `bwrap-web` does not reorder the list for you; it passes the arguments in exactly the order shown.
 
 **Continue your last session:**
 

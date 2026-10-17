@@ -49,7 +49,9 @@ const PROTECTED_RW: [&str; 10] = [
 #[serde(default)]
 struct Config {
     /// Directory the agent may read and write (the "project"). Relative paths are
-    /// resolved against the directory bwrap-web was started from.
+    /// resolved against the directory bwrap-web was started from. Paths under
+    /// `$HOME` are stored in `~/...` form, which `expand` resolves back to the
+    /// same absolute path.
     project_dir: String,
     /// Program to run inside the sandbox: bare name (looked up on the host) or absolute path.
     command: String,
@@ -73,7 +75,13 @@ impl Default for Config {
                 .map(|p| p.to_string_lossy().into_owned())
                 .unwrap_or_default(),
             command: "opencode".into(),
-            args: vec![],
+            // `--standalone` makes the agent run its own server as a child
+            // process instead of attaching to the long-lived host-side
+            // `opencode serve` daemon, whose tool calls would run outside these
+            // namespaces. Note that OpenCode only accepts the flag at the
+            // position shown here — before a subcommand it rejects it — so
+            // "run"/"mini" invocations need it after the subcommand instead.
+            args: vec!["--standalone".into()],
             share_net: true,
             ro_mounts: strs(&[
                 "~/.opencode",
@@ -129,8 +137,8 @@ fn clean_list(v: &[String]) -> Vec<String> {
 }
 
 impl Config {
-    fn normalized(mut self) -> Config {
-        self.project_dir = self.project_dir.trim().to_string();
+    fn normalized(mut self, home: &Path) -> Config {
+        self.project_dir = shorten_home(self.project_dir.trim(), home);
         self.command = self.command.trim().to_string();
         self.args = clean_list(&self.args);
         self.ro_mounts = clean_list(&self.ro_mounts);
@@ -149,14 +157,14 @@ fn home_dir() -> Result<PathBuf> {
     Ok(h)
 }
 
-fn load_config(path: &Path) -> Result<Config> {
+fn load_config(path: &Path, home: &Path) -> Result<Config> {
     if !path.exists() {
-        return Ok(Config::default());
+        return Ok(Config::default().normalized(home));
     }
     let text = std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let cfg: Config =
         serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
-    Ok(cfg.normalized())
+    Ok(cfg.normalized(home))
 }
 
 fn save_config(path: &Path, cfg: &Config) -> Result<()> {
@@ -202,6 +210,31 @@ fn expand(p: &str, home: &Path) -> Result<PathBuf> {
 
 fn expand_all(list: &[String], home: &Path) -> Result<Vec<PathBuf>> {
     list.iter().map(|m| expand(m, home)).collect()
+}
+
+/// Render a path under `home` as `~/sub/dir` instead of `/home/user/sub/dir`, so
+/// the settings page and the config file do not spell out the full home path.
+/// Anything outside `home` is returned unchanged.
+///
+/// Only absolute inputs are rewritten, and the prefix test is component-wise
+/// (`strip_prefix`, not string `starts_with`), so `/home/yfoo` is not mistaken
+/// for `/home/y`. Relative inputs are deliberately left alone: `resolve_project`
+/// anchors them to the directory bwrap-web was started from, and rewriting them
+/// against `$HOME` would silently repoint them at a different directory.
+///
+/// This is presentation only. `expand` turns `~/...` back into the same absolute
+/// path before `check_mount` runs, so the home-directory guard still sees the
+/// real location.
+fn shorten_home(p: &str, home: &Path) -> String {
+    let path = Path::new(p);
+    if !path.is_absolute() {
+        return p.to_string();
+    }
+    match path.strip_prefix(home).ok().and_then(|rest| rest.to_str()) {
+        Some("") => "~".to_string(),
+        Some(rest) => format!("~/{rest}"),
+        None => p.to_string(),
+    }
 }
 
 /// Resolve the project directory. Relative paths (`./test`, `../x`, `test`) are resolved
@@ -544,15 +577,15 @@ async fn get_config(State(st): State<Shared>) -> Json<Config> {
 
 /// The built-in defaults, so the UI can offer a "reset to defaults" without
 /// having to persist them first.
-async fn get_config_defaults() -> Json<Config> {
-    Json(Config::default())
+async fn get_config_defaults(State(st): State<Shared>) -> Json<Config> {
+    Json(Config::default().normalized(&st.home))
 }
 
 async fn put_config(
     State(st): State<Shared>,
     Json(cfg): Json<Config>,
 ) -> Result<Json<Config>, ApiError> {
-    let cfg = cfg.normalized();
+    let cfg = cfg.normalized(&st.home);
     validate(&cfg, &st.home).map_err(bad_request)?;
     save_config(&st.config_path, &cfg).map_err(|e| {
         ApiError(StatusCode::INTERNAL_SERVER_ERROR, format!("saving config: {e:#}"))
@@ -737,7 +770,7 @@ async fn main() -> Result<()> {
     let port = parse_port()?;
     let home = home_dir()?;
     let config_path = home.join(".config/bwrap-web/config.json");
-    let config = load_config(&config_path)?;
+    let config = load_config(&config_path, &home)?;
 
     let mut raw = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut raw);
@@ -778,4 +811,87 @@ async fn main() -> Result<()> {
 
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn home() -> PathBuf {
+        PathBuf::from("/home/u")
+    }
+
+    #[test]
+    fn shortens_paths_under_home() {
+        assert_eq!(shorten_home("/home/u/a/b", &home()), "~/a/b");
+        assert_eq!(shorten_home("/home/u", &home()), "~");
+    }
+
+    /// `/home/u2` shares a string prefix with `/home/u` but is a different
+    /// directory; a string comparison would rewrite it to `~2/...` and point
+    /// the project at the wrong place.
+    #[test]
+    fn does_not_shorten_sibling_with_shared_prefix() {
+        assert_eq!(shorten_home("/home/u2/x", &home()), "/home/u2/x");
+    }
+
+    #[test]
+    fn leaves_paths_outside_home_alone() {
+        assert_eq!(
+            shorten_home("/data/projects/x", &home()),
+            "/data/projects/x"
+        );
+        assert_eq!(shorten_home("/", &home()), "/");
+    }
+
+    /// Relative paths are anchored to the process working directory by
+    /// `resolve_project`. Rewriting them against `$HOME` would silently change
+    /// which directory they name.
+    #[test]
+    fn leaves_relative_paths_alone() {
+        assert_eq!(shorten_home("./test", &home()), "./test");
+        assert_eq!(shorten_home("test", &home()), "test");
+        assert_eq!(shorten_home("../other", &home()), "../other");
+    }
+
+    /// Idempotent, so a config that already uses `~` is not mangled on reload.
+    #[test]
+    fn shortening_is_idempotent() {
+        let once = shorten_home("/home/u/a", &home());
+        assert_eq!(shorten_home(&once, &home()), once);
+    }
+
+    /// The shortened form must resolve back to the same directory, which is
+    /// what keeps `check_mount` seeing the real path.
+    #[test]
+    fn shortened_form_expands_back_to_the_same_path() {
+        let abs = "/home/u/a/b";
+        let short = shorten_home(abs, &home());
+        match expand(&short, &home()) {
+            Ok(p) => assert_eq!(p, PathBuf::from(abs)),
+            Err(e) => panic!("expanding {short} failed: {e:#}"),
+        }
+    }
+
+    #[test]
+    fn shortens_project_dir_when_normalizing() {
+        let cfg = Config {
+            project_dir: "/home/u/a/b".into(),
+            ..Config::default()
+        };
+        assert_eq!(cfg.normalized(&home()).project_dir, "~/a/b");
+    }
+
+    #[test]
+    fn normalizes_project_dir_before_always_shortening_it() {
+        let cfg = Config {
+            project_dir: "  /home/u/a  ".into(),
+            ..Config::default()
+        };
+        assert_eq!(cfg.normalized(&home()).project_dir, "~/a");
+    }
 }
